@@ -1,0 +1,4 @@
+colorzero==2.0
+gpiozero==2.0.1
+loguru==0.7.3
+setuptools==80.9.0
