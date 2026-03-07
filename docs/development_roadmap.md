@@ -11,6 +11,12 @@ Next:
 - speed measurement
 - closed-loop control
 
+## Progress Update
+- Day 9 complete: awareness layer added using HC-SR04 + 4 IR edge sensors
+- Day 10 complete: Arduino-side safety gating added for forward/reverse/pivot risk handling
+- Known current limitation: edge/fault chatter under lifted bench testing
+- Next focus: Day 11 operator console / signal cleanup / fault debounce planning 
+
 ## Phase 2 – Mobility Intelligence
 - obstacle sensors
 - mapping
