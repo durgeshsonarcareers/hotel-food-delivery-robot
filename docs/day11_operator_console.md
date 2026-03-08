@@ -1,30 +1,35 @@
-Day 11 – Operator Console
+# Day 11 – Operator Console
 
-Objective
-Convert teleop control script into a real-time operator console.
+## Objective
 
-Achievements
+Convert the teleop control script into a real-time operator console.
 
-• teleop.py upgraded to dashboard interface
-• serial log spam removed
-• keyboard control integrated with dashboard
-• sensor telemetry displayed live
-• connection health detection implemented
-• command TX rate displayed
+## Achievements
 
-Architecture
+- `teleop.py` upgraded to dashboard-style interface
+- serial log spam removed
+- keyboard control integrated with dashboard
+- sensor telemetry displayed live
+- connection health detection implemented
+- command TX rate displayed
+
+## Architecture
 
 Raspberry Pi
-    teleop.py → operator console
-    sensor_monitor.py → debugging tool
+
+- `teleop.py` → operator console
+- `sensor_monitor.py` → sensor debugging tool
 
 Arduino
-    sensor telemetry
-    safety gating
-    motor control
 
-Impact
+- motor control
+- ultrasonic sensing
+- edge sensors
+- safety gating
+- telemetry reporting
 
-Operator can control robot while monitoring safety sensors and system state in real time.
+## Impact
 
-This forms the foundation for future autonomy layers.
+The operator can now control the robot while monitoring sensor and safety state in real time.
+
+This creates the foundation for later autonomy layers and fleet management tools.
