@@ -7,32 +7,21 @@ import termios
 import threading
 import time
 import tty
-from typing import Optional, Tuple
+from typing import Optional
 
 BAUD = 115200
 SEND_HZ = 20
+REFRESH_HZ = 10
+CONNECTION_TIMEOUT_S = 2.0
 
 state_lock = threading.Lock()
 serial_lock = threading.Lock()
 
-left = 0
-right = 0
 running = True
 
-last_tx_msg = None
-last_tx_log_time = 0.0
 
-last_tel_state = None
-last_us_zone = None
-
-
-def ts() -> str:
+def now_str() -> str:
     return time.strftime("%H:%M:%S")
-
-
-def log(msg: str) -> None:
-    sys.stdout.write(f"\r\n[{ts()}] {msg}\r\n")
-    sys.stdout.flush()
 
 
 def pick_port() -> str:
@@ -42,96 +31,122 @@ def pick_port() -> str:
     return candidates[0]
 
 
-def set_vel(l: int, r: int) -> None:
-    global left, right
-    with state_lock:
-        left, right = l, r
+class ConsoleState:
+    def __init__(self) -> None:
+        self.port = ""
+        self.current_command = "STOP"
+        self.left_speed = 0
+        self.right_speed = 0
+
+        self.last_sent = "-"
+        self.last_rx = "-"
+        self.last_event = "Startup"
+        self.last_event_time = now_str()
+
+        self.ack_count = 0
+        self.connected = False
+        self.last_rx_time = 0.0
+
+        self.fault_state = "NONE"
+
+        self.us_cm = -1
+        self.front_edge = 0
+        self.rear_edge = 0
+        self.edge = {"fl": 0, "fr": 0, "rl": 0, "rr": 0}
 
 
-def get_vel() -> Tuple[int, int]:
+console = ConsoleState()
+
+
+def set_event(text: str) -> None:
     with state_lock:
-        return left, right
+        console.last_event = text
+        console.last_event_time = now_str()
+
+
+def set_motion(command: str, left: int, right: int) -> None:
+    with state_lock:
+        console.current_command = command
+        console.left_speed = left
+        console.right_speed = right
+        console.last_event = f"Command -> {command}"
+        console.last_event_time = now_str()
+
+
+def get_motion() -> tuple[int, int]:
+    with state_lock:
+        return console.left_speed, console.right_speed
 
 
 def serial_write_line(ser: serial.Serial, line: str) -> None:
     with serial_lock:
         ser.write((line + "\n").encode("utf-8"))
         ser.flush()
+    with state_lock:
+        console.last_sent = line
 
 
-def ultrasonic_zone(us_cm: int) -> str:
-    if us_cm is None or us_cm < 0:
-        return "NO_ECHO"
-    if us_cm < 20:
-        return "NEAR"
-    if us_cm < 50:
-        return "MID"
-    return "FAR"
-
-
-def parse_tel(line: str) -> Optional[dict]:
+def parse_tel_line(line: str) -> Optional[dict]:
     if not line.startswith("TEL "):
         return None
+    payload = line[4:].strip()
     try:
-        return json.loads(line[4:].strip())
+        return json.loads(payload)
     except json.JSONDecodeError:
         return None
 
 
-def summarize_tel_change(data: dict) -> Optional[str]:
-    global last_tel_state, last_us_zone
+def update_telemetry(data: dict) -> None:
+    with state_lock:
+        console.us_cm = data.get("us_cm", console.us_cm)
+        console.front_edge = data.get("front_edge", console.front_edge)
+        console.rear_edge = data.get("rear_edge", console.rear_edge)
 
-    front_edge = int(data.get("front_edge", 0))
-    rear_edge = int(data.get("rear_edge", 0))
-    edge = data.get("edge", {})
-    fl = int(edge.get("fl", 0))
-    fr = int(edge.get("fr", 0))
-    rl = int(edge.get("rl", 0))
-    rr = int(edge.get("rr", 0))
-    us_cm = int(data.get("us_cm", -1))
+        edge = data.get("edge", {})
+        if isinstance(edge, dict):
+            console.edge["fl"] = edge.get("fl", console.edge["fl"])
+            console.edge["fr"] = edge.get("fr", console.edge["fr"])
+            console.edge["rl"] = edge.get("rl", console.edge["rl"])
+            console.edge["rr"] = edge.get("rr", console.edge["rr"])
 
-    current_state = (front_edge, rear_edge, fl, fr, rl, rr)
-    current_zone = ultrasonic_zone(us_cm)
+        console.last_rx = "TEL"
+        console.connected = True
+        console.last_rx_time = time.monotonic()
 
-    parts = []
+def set_fault(text: str) -> None:
+    with state_lock:
+        console.fault_state = text
+        console.last_rx = f"FAULT {text}"
+        console.connected = True
+        console.last_rx_time = time.monotonic()
+        console.last_event = f"Fault -> {text}"
+        console.last_event_time = now_str()
 
-    if last_tel_state is None or current_state != last_tel_state:
-        parts.append(
-            f"SENSE front={'EDGE' if front_edge else 'OK'} "
-            f"rear={'EDGE' if rear_edge else 'OK'} "
-            f"[FL={fl} FR={fr} RL={rl} RR={rr}]"
-        )
+def clear_fault_display() -> None:
+    with state_lock:
+        console.fault_state = "NONE"
 
-    if last_us_zone is None or current_zone != last_us_zone:
-        if us_cm < 0:
-            parts.append("US NO_ECHO")
-        else:
-            parts.append(f"US {us_cm}cm ({current_zone})")
 
-    last_tel_state = current_state
-    last_us_zone = current_zone
-
-    if parts:
-        return " | ".join(parts)
-    return None
+def mark_ack() -> None:
+    with state_lock:
+        console.ack_count += 1
+        console.last_rx = "ACK"
+        console.connected = True
+        console.last_rx_time = time.monotonic()
 
 
 def send_loop(ser: serial.Serial) -> None:
-    global running, last_tx_msg, last_tx_log_time
-
+    global running
     period = 1.0 / SEND_HZ
 
     while running:
-        l, r = get_vel()
-        msg = f"VEL {l} {r}"
-        serial_write_line(ser, msg)
-
-        # Only log TX when command actually changes
-        if msg != last_tx_msg:
-            log(f"TX {msg}")
-            last_tx_msg = msg
-            last_tx_log_time = time.time()
-
+        left, right = get_motion()
+        msg = f"VEL {left} {right}"
+        try:
+            serial_write_line(ser, msg)
+        except Exception as exc:
+            set_event(f"TX error: {exc}")
+            break
         time.sleep(period)
 
 
@@ -141,107 +156,217 @@ def read_loop(ser: serial.Serial) -> None:
     while running:
         try:
             line = ser.readline().decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
-
-            tel = parse_tel(line)
-            if tel is not None:
-                summary = summarize_tel_change(tel)
-                if summary:
-                    log(summary)
-                continue
-
-            # suppress repetitive ACK VEL noise
-            if line.startswith("ACK VEL"):
-                continue
-
-            # keep important lines visible
-            if (
-                line.startswith("FAULT")
-                or line.startswith("TIMEOUT")
-                or line.startswith("ERR")
-                or line.startswith("ACK STOP")
-                or line.startswith("ACK RESET")
-            ):
-                log(f"ARD {line}")
-                continue
-
-            # fallback for anything unexpected
-            log(f"ARD {line}")
-
-        except Exception as e:
-            log(f"RX ERROR {e}")
+        except Exception as exc:
+            set_event(f"RX error: {exc}")
             break
+
+        if not line:
+            continue
+
+        parsed = parse_tel_line(line)
+        if parsed is not None:
+            update_telemetry(parsed)
+            continue
+
+        if line.startswith("ACK"):
+            mark_ack()
+            continue
+
+        if line.startswith("FAULT"):
+            fault_text = line[len("FAULT"):].strip() or "ACTIVE"
+            set_fault(fault_text)
+            continue
+
+        with state_lock:
+            console.last_rx = line
+            console.connected = True
+            console.last_rx_time = time.monotonic()
+
+
+def bool_state_text(active: int) -> str:
+    return "EDGE" if bool(active) else "OK"
+
+def ultrasonic_text(us_cm: int) -> str:
+    if us_cm is None or us_cm < 0:
+        return "NO ECHO"
+    return f"{us_cm} cm"
+
+
+def dashboard_text() -> str:
+    with state_lock:
+        port = console.port
+        rx_age = time.monotonic() - console.last_rx_time if console.last_rx_time > 0 else 9999
+        connected = "YES" if console.connected and rx_age <= CONNECTION_TIMEOUT_S else "LOST"
+
+        current_command = console.current_command
+        left_speed = console.left_speed
+        right_speed = console.right_speed
+
+        fault_state = console.fault_state
+
+        us_text = ultrasonic_text(console.us_cm)
+        front_edge = bool_state_text(console.front_edge)
+        rear_edge = bool_state_text(console.rear_edge)
+
+        fl = bool_state_text(console.edge.get("fl", 0))
+        fr = bool_state_text(console.edge.get("fr", 0))
+        rl = bool_state_text(console.edge.get("rl", 0))
+        rr = bool_state_text(console.edge.get("rr", 0))
+
+        last_sent = console.last_sent
+        last_rx = console.last_rx
+        last_event = console.last_event
+        last_event_time = console.last_event_time
+        ack_count = console.ack_count
+        tx_rate_hz = SEND_HZ
+
+    lines = [
+        "HOTEL ROBOT - DAY 11 OPERATOR CONSOLE",
+        "",
+        f"Serial Port : {port}",
+        f"Connected   : {connected}",
+        f"ACK Count   : {ack_count}",
+        f"TX Rate     : {tx_rate_hz} Hz",
+        "",
+        "MOTION",
+        f" Current Command : {current_command}",
+        f" Left Speed      : {left_speed}",
+        f" Right Speed     : {right_speed}",
+        "",
+        "SAFETY",
+        f" Fault State     : {fault_state}",
+        "",
+        "SENSORS",
+        f" Ultrasonic      : {us_text}",
+        f" Front Edge      : {front_edge}",
+        f" Rear Edge       : {rear_edge}",
+        "",
+        "INDIVIDUAL EDGE SENSORS",
+        f" FL              : {fl}",
+        f" FR              : {fr}",
+        f" RL              : {rl}",
+        f" RR              : {rr}",
+        "",
+        "LAST ACTIVITY",
+        f" Last Sent       : {last_sent}",
+        f" Last RX         : {last_rx}",
+        f" Last Event      : {last_event_time} | {last_event}",
+        "",
+        "CONTROLS",
+        " W = forward",
+        " S = backward",
+        " A = left",
+        " D = right",
+        " SPACE = stop",
+        " R = reset",
+        " Q = quit",
+        "",
+        "Legend: OK = floor present, EDGE = edge/cliff detected",
+    ]
+    return "\r\n".join(lines)
 
 
 def read_key_nonblocking(timeout: float = 0.05) -> Optional[str]:
-    dr, _, _ = select.select([sys.stdin], [], [], timeout)
-    if dr:
+    ready, _, _ = select.select([sys.stdin], [], [], timeout)
+    if ready:
         return sys.stdin.read(1)
     return None
+
+
+def handle_key(ser: serial.Serial, key: str) -> bool:
+    if key == "w":
+        clear_fault_display()
+        set_motion("FORWARD", 150, 150)
+    elif key == "s":
+        clear_fault_display()
+        set_motion("BACKWARD", -150, -150)
+    elif key == "a":
+        clear_fault_display()
+        set_motion("LEFT", -120, 120)
+    elif key == "d":
+        clear_fault_display()
+        set_motion("RIGHT", 120, -120)
+    elif key == " ":
+        set_motion("STOP", 0, 0)
+        set_event("Manual stop")
+    elif key == "r":
+        serial_write_line(ser, "RESET")
+        clear_fault_display()
+        set_event("Reset requested")
+    elif key == "q":
+        set_event("Quit requested")
+        return False
+
+    return True
 
 
 def main() -> None:
     global running
 
     port = pick_port()
-    log(f"Using serial port: {port}")
+    console.port = port
 
     ser = serial.Serial(port, BAUD, timeout=0.2)
-    time.sleep(2)
+    time.sleep(2.0)
     ser.reset_input_buffer()
     ser.reset_output_buffer()
 
+    with state_lock:
+        console.connected = True
+        console.last_event = "Console started"
+        console.last_event_time = now_str()
+
     tx_thread = threading.Thread(target=send_loop, args=(ser,), daemon=True)
     rx_thread = threading.Thread(target=read_loop, args=(ser,), daemon=True)
+
     tx_thread.start()
     rx_thread.start()
 
-    log("Teleop: press key once -> keep moving until next command")
-    log("w/s/a/d move, SPACE stop, r reset, q quit")
-
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
-    tty.setraw(fd)
+    tty.setcbreak(fd)
+
+    last_draw = 0.0
+    draw_period = 1.0 / REFRESH_HZ
 
     try:
-        while True:
-            key = read_key_nonblocking(0.05)
-            if key is None:
-                continue
+        keep_running = True
+        sys.stdout.write("\x1b[2J\x1b[H")
+        sys.stdout.write("\x1b[?25l")
+        sys.stdout.flush()
 
-            if key == "w":
-                set_vel(150, 150)
-                log("CMD forward")
-            elif key == "s":
-                set_vel(-150, -150)
-                log("CMD backward")
-            elif key == "a":
-                set_vel(-120, 120)
-                log("CMD left")
-            elif key == "d":
-                set_vel(120, -120)
-                log("CMD right")
-            elif key == " ":
-                set_vel(0, 0)
-                serial_write_line(ser, "STOP")
-                log("CMD stop")
-            elif key == "r":
-                serial_write_line(ser, "RESET")
-                log("CMD reset")
-            elif key == "q":
-                log("CMD quit")
-                break
+        while keep_running:
+            now = time.monotonic()
+
+            if now - last_draw >= draw_period:
+                sys.stdout.write("\x1b[H")
+                sys.stdout.write(dashboard_text())
+                sys.stdout.write("\x1b[J")
+                sys.stdout.flush()
+                last_draw = now
+
+            key = read_key_nonblocking(0.05)
+            if key is not None:
+                keep_running = handle_key(ser, key)
+
     finally:
         running = False
-        set_vel(0, 0)
+        set_motion("STOP", 0, 0)
+
         try:
-            serial_write_line(ser, "STOP")
+            serial_write_line(ser, "VEL 0 0")
             time.sleep(0.1)
         except Exception:
             pass
+
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+        sys.stdout.write("\x1b[?25h")
+        sys.stdout.write("\x1b[2J\x1b[H")
+        sys.stdout.flush()
+
         ser.close()
+        print("Teleop exited cleanly.")
 
 
 if __name__ == "__main__":
