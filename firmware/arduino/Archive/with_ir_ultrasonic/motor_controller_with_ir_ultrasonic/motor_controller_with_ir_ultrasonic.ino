@@ -1,38 +1,37 @@
-// Hotel Robot PoC - Arduino motor controller + Day 9 awareness telemetry
+// Hotel Robot - Motor controller + ultrasonic + IR edge telemetry
+// Final Day 9 version
 //
-// Preserves existing command protocol from Raspberry Pi teleop:
+// Commands from Raspberry Pi:
 //   VEL <left> <right>
 //   STOP
 //   RESET
 //
-// Adds sensor telemetry lines in this format:
-//   TEL {"us_cm":34,"front_edge":0,"rear_edge":0,"edge":{"fl":0,"fr":0,"rl":0,"rr":0}}
-//
-// Notes:
-// - IR sensors are treated as downward edge/cliff sensors.
-// - Active LOW means: LOW = edge/cliff detected.
-// - Teleop behavior is not changed.
-// - Telemetry is read-only and does not stop motors by itself yet.
+// Telemetry output:
+//   TEL {"us_cm":12,"front_edge":0,"rear_edge":1,"edge":{"fl":0,"fr":0,"rl":1,"rr":1}}
 
 #include <string.h>
 #include <stdio.h>
 
+// ------------------------------
+// Motor pins
+// ------------------------------
 const int PWM_A = 5;
 const int DIR_A = 4;
 const int PWM_B = 6;
 const int DIR_B = 7;
 
-// Keep these aligned with actual motor wiring.
+// Adjust if your motor direction is reversed
 bool FORWARD_DIR_A = true;
 bool FORWARD_DIR_B = true;
 
-// Existing bumper support from v1
-const int bumperPin = 22;                  // harmless if using Mega; ignore if not wired on Uno builds
-const int BUMPER_TRIGGERED_STATE = HIGH;
-const unsigned long DEBOUNCE_MS = 30;
+// ------------------------------
+// Safety / command timing
+// ------------------------------
 const unsigned long CMD_TIMEOUT_MS = 300;
 
-// Day 9 sensors
+// ------------------------------
+// Day 9 sensor pins
+// ------------------------------
 const int US_TRIG_PIN = 8;
 const int US_ECHO_PIN = 9;
 
@@ -41,14 +40,17 @@ const int IR_FR_PIN = 11;
 const int IR_RL_PIN = 12;
 const int IR_RR_PIN = 13;
 
+// Proven from your real test:
+// 0 = floor
+// 1 = edge
+const int EDGE_ACTIVE_STATE = HIGH;
+
 const unsigned long TELEMETRY_MS = 100;
-const unsigned long ULTRASONIC_TIMEOUT_US = 30000UL; // ~5m max pulse timeout
+const unsigned long ULTRASONIC_TIMEOUT_US = 30000UL;
 
-int stableState = HIGH;
-int lastRaw = HIGH;
-unsigned long lastChangeMs = 0;
-
-bool faultLatched = false;
+// ------------------------------
+// Runtime state
+// ------------------------------
 int currentLeft = 0;
 int currentRight = 0;
 unsigned long lastCmdMs = 0;
@@ -57,6 +59,9 @@ unsigned long lastTelemetryMs = 0;
 char lineBuf[64];
 size_t lineLen = 0;
 
+// ------------------------------
+// Sensor structs
+// ------------------------------
 struct EdgeState {
   bool fl;
   bool fr;
@@ -64,6 +69,16 @@ struct EdgeState {
   bool rr;
 };
 
+struct RawIrState {
+  int fl;
+  int fr;
+  int rl;
+  int rr;
+};
+
+// ------------------------------
+// Motor helpers
+// ------------------------------
 void stopMotors() {
   analogWrite(PWM_A, 0);
   analogWrite(PWM_B, 0);
@@ -82,41 +97,13 @@ void applyDrive(int left, int right) {
   applyMotorSingle(PWM_B, DIR_B, FORWARD_DIR_B, right);
 }
 
-void setupBumper() {
-  // If you're on Uno and bumper isn't used, this stays effectively idle.
-  pinMode(bumperPin, INPUT_PULLUP);
-  stableState = digitalRead(bumperPin);
-  lastRaw = stableState;
-  lastChangeMs = millis();
-}
-
-bool bumperTriggeredDebounced() {
-  int raw = digitalRead(bumperPin);
-
-  if (raw != lastRaw) {
-    lastRaw = raw;
-    lastChangeMs = millis();
-  }
-
-  if ((millis() - lastChangeMs) > DEBOUNCE_MS && raw != stableState) {
-    stableState = raw;
-    if (stableState == BUMPER_TRIGGERED_STATE) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void clearMotionState() {
-  currentLeft = 0;
-  currentRight = 0;
-  stopMotors();
-}
-
 void armCommandWatchdog() {
   lastCmdMs = millis();
 }
 
+// ------------------------------
+// Serial command handling
+// ------------------------------
 void handleStopCommand() {
   currentLeft = 0;
   currentRight = 0;
@@ -126,7 +113,6 @@ void handleStopCommand() {
 }
 
 void handleResetCommand() {
-  faultLatched = false;
   currentLeft = 0;
   currentRight = 0;
   stopMotors();
@@ -138,9 +124,10 @@ void handleVelCommand(int left, int right) {
   currentLeft = constrain(left, -255, 255);
   currentRight = constrain(right, -255, 255);
   armCommandWatchdog();
+
   Serial.print("ACK VEL ");
   Serial.print(currentLeft);
-  Serial.print(' ');
+  Serial.print(" ");
   Serial.println(currentRight);
 }
 
@@ -192,6 +179,9 @@ void readSerialLines() {
   }
 }
 
+// ------------------------------
+// Sensor helpers
+// ------------------------------
 void setupSensors() {
   pinMode(US_TRIG_PIN, OUTPUT);
   pinMode(US_ECHO_PIN, INPUT);
@@ -204,12 +194,21 @@ void setupSensors() {
   digitalWrite(US_TRIG_PIN, LOW);
 }
 
-EdgeState readEdgeSensors() {
+RawIrState readRawIrSensors() {
+  RawIrState raw;
+  raw.fl = digitalRead(IR_FL_PIN);
+  raw.fr = digitalRead(IR_FR_PIN);
+  raw.rl = digitalRead(IR_RL_PIN);
+  raw.rr = digitalRead(IR_RR_PIN);
+  return raw;
+}
+
+EdgeState interpretEdgeSensors(const RawIrState& raw) {
   EdgeState e;
-  e.fl = (digitalRead(IR_FL_PIN) == LOW);
-  e.fr = (digitalRead(IR_FR_PIN) == LOW);
-  e.rl = (digitalRead(IR_RL_PIN) == LOW);
-  e.rr = (digitalRead(IR_RR_PIN) == LOW);
+  e.fl = (raw.fl == EDGE_ACTIVE_STATE);
+  e.fr = (raw.fr == EDGE_ACTIVE_STATE);
+  e.rl = (raw.rl == EDGE_ACTIVE_STATE);
+  e.rr = (raw.rr == EDGE_ACTIVE_STATE);
   return e;
 }
 
@@ -224,26 +223,29 @@ int readUltrasonicCm() {
   unsigned long duration = pulseIn(US_ECHO_PIN, HIGH, ULTRASONIC_TIMEOUT_US);
 
   if (duration == 0) {
-    return -1; // no echo / timeout
+    return -1; // no echo
   }
 
-  int cm = (int)(duration * 0.0343 / 2.0);
-  return cm;
+  return (int)(duration * 0.0343 / 2.0);
 }
 
 void sendTelemetry() {
   int us_cm = readUltrasonicCm();
-  EdgeState e = readEdgeSensors();
+  RawIrState raw = readRawIrSensors();
+  EdgeState e = interpretEdgeSensors(raw);
 
   bool front_edge = e.fl || e.fr;
   bool rear_edge  = e.rl || e.rr;
 
   Serial.print("TEL {\"us_cm\":");
   Serial.print(us_cm);
+
   Serial.print(",\"front_edge\":");
   Serial.print(front_edge ? 1 : 0);
+
   Serial.print(",\"rear_edge\":");
   Serial.print(rear_edge ? 1 : 0);
+
   Serial.print(",\"edge\":{\"fl\":");
   Serial.print(e.fl ? 1 : 0);
   Serial.print(",\"fr\":");
@@ -255,6 +257,9 @@ void sendTelemetry() {
   Serial.println("}}");
 }
 
+// ------------------------------
+// Arduino setup / loop
+// ------------------------------
 void setup() {
   Serial.begin(115200);
 
@@ -263,8 +268,7 @@ void setup() {
   pinMode(PWM_B, OUTPUT);
   pinMode(DIR_B, OUTPUT);
 
-  clearMotionState();
-  setupBumper();
+  stopMotors();
   setupSensors();
   armCommandWatchdog();
 
@@ -275,15 +279,7 @@ void setup() {
 void loop() {
   readSerialLines();
 
-  if (bumperTriggeredDebounced()) {
-    faultLatched = true;
-    clearMotionState();
-    Serial.println("FAULT BUMPER");
-  }
-
-  if (faultLatched) {
-    stopMotors();
-  } else if ((millis() - lastCmdMs) > CMD_TIMEOUT_MS) {
+  if ((millis() - lastCmdMs) > CMD_TIMEOUT_MS) {
     if (currentLeft != 0 || currentRight != 0) {
       currentLeft = 0;
       currentRight = 0;
