@@ -50,10 +50,9 @@ class ConsoleState:
         self.fault_state = "NONE"
 
         self.us_cm = -1
-        self.front_edge = 0
-        self.rear_edge = 0
         self.edge = {"fl": 0, "fr": 0, "rl": 0, "rr": 0}
-
+        self.enc_l = 0
+        self.enc_r = 0
 
 console = ConsoleState()
 
@@ -99,8 +98,6 @@ def parse_tel_line(line: str) -> Optional[dict]:
 def update_telemetry(data: dict) -> None:
     with state_lock:
         console.us_cm = data.get("us_cm", console.us_cm)
-        console.front_edge = data.get("front_edge", console.front_edge)
-        console.rear_edge = data.get("rear_edge", console.rear_edge)
 
         edge = data.get("edge", {})
         if isinstance(edge, dict):
@@ -108,6 +105,11 @@ def update_telemetry(data: dict) -> None:
             console.edge["fr"] = edge.get("fr", console.edge["fr"])
             console.edge["rl"] = edge.get("rl", console.edge["rl"])
             console.edge["rr"] = edge.get("rr", console.edge["rr"])
+
+        enc = data.get("enc", {})
+        if isinstance(enc, dict):
+            console.enc_l = enc.get("l", console.enc_l)
+            console.enc_r = enc.get("r", console.enc_r)
 
         console.last_rx = "TEL"
         console.connected = True
@@ -205,13 +207,22 @@ def dashboard_text() -> str:
         fault_state = console.fault_state
 
         us_text = ultrasonic_text(console.us_cm)
-        front_edge = bool_state_text(console.front_edge)
-        rear_edge = bool_state_text(console.rear_edge)
 
-        fl = bool_state_text(console.edge.get("fl", 0))
-        fr = bool_state_text(console.edge.get("fr", 0))
-        rl = bool_state_text(console.edge.get("rl", 0))
-        rr = bool_state_text(console.edge.get("rr", 0))
+        fl_active = bool(console.edge.get("fl", 0))
+        fr_active = bool(console.edge.get("fr", 0))
+        rl_active = bool(console.edge.get("rl", 0))
+        rr_active = bool(console.edge.get("rr", 0))
+
+        front_edge = "EDGE" if (fl_active or fr_active) else "OK"
+        rear_edge = "EDGE" if (rl_active or rr_active) else "OK"
+
+        fl = "EDGE" if fl_active else "OK"
+        fr = "EDGE" if fr_active else "OK"
+        rl = "EDGE" if rl_active else "OK"
+        rr = "EDGE" if rr_active else "OK"
+
+        enc_l = console.enc_l
+        enc_r = console.enc_r
 
         last_sent = console.last_sent
         last_rx = console.last_rx
@@ -221,36 +232,40 @@ def dashboard_text() -> str:
         tx_rate_hz = SEND_HZ
 
     lines = [
-        "HOTEL ROBOT - DAY 11 OPERATOR CONSOLE",
+        "HOTEL ROBOT - DAY 14 OPERATOR CONSOLE",
         "",
-        f"Serial Port : {port}",
-        f"Connected   : {connected}",
-        f"ACK Count   : {ack_count}",
-        f"TX Rate     : {tx_rate_hz} Hz",
+        f"Serial Port      : {port:<20}",
+        f"Connected        : {connected:<4}",
+        f"ACK Count        : {ack_count:<6}",
+        f"TX Rate          : {f'{tx_rate_hz} Hz':<8}",
         "",
         "MOTION",
-        f" Current Command : {current_command}",
-        f" Left Speed      : {left_speed}",
-        f" Right Speed     : {right_speed}",
+        f" Current Command : {current_command:<10}",
+        f" Left Speed      : {left_speed:<6}",
+        f" Right Speed     : {right_speed:<6}",
         "",
         "SAFETY",
-        f" Fault State     : {fault_state}",
+        f" Fault State     : {fault_state:<10}",
         "",
         "SENSORS",
-        f" Ultrasonic      : {us_text}",
-        f" Front Edge      : {front_edge}",
-        f" Rear Edge       : {rear_edge}",
+        f" Ultrasonic      : {us_text:<10}",
+        f" Front Edge      : {front_edge:<4}",
+        f" Rear Edge       : {rear_edge:<4}",
+        "",
+        "ENCODERS",
+        f" Left Count      : {enc_l:<8}",
+        f" Right Count     : {enc_r:<8}",
         "",
         "INDIVIDUAL EDGE SENSORS",
-        f" FL              : {fl}",
-        f" FR              : {fr}",
-        f" RL              : {rl}",
-        f" RR              : {rr}",
+        f" FL              : {fl:<4}",
+        f" FR              : {fr:<4}",
+        f" RL              : {rl:<4}",
+        f" RR              : {rr:<4}",
         "",
         "LAST ACTIVITY",
-        f" Last Sent       : {last_sent}",
-        f" Last RX         : {last_rx}",
-        f" Last Event      : {last_event_time} | {last_event}",
+        f" Last Sent       : {last_sent:<20}",
+        f" Last RX         : {last_rx:<20}",
+        f" Last Event      : {(last_event_time + ' | ' + last_event):<40}",
         "",
         "CONTROLS",
         " W = forward",
