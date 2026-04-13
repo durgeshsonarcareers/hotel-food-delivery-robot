@@ -161,6 +161,14 @@ RESET
 This serial contract must remain stable unless there is a very good reason to change it.
 
 ---
+### Latest Update (Day 14)
+
+- Encoder feedback fully integrated into runtime
+- Telemetry schema extended (`enc` object)
+- Console now supports real-time encoder monitoring
+- Edge sensor logic simplified and corrected
+- System stable and ready for motion analysis phase
+
 
 ## Current Known State
 
