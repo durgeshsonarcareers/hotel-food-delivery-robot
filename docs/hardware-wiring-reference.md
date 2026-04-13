@@ -1,339 +1,353 @@
 # Hotel Robot Hardware Wiring Reference
 
 ## Purpose
-This file tracks the current live wiring and signal mapping for the robot so future development does not rely only on code or memory.
+This file records the current live hardware wiring, controller roles, pin mapping, and integration status for the hotel food delivery robot. It should be treated as the single reference point for wiring work before changing firmware or hardware.
 
 ---
 
-# Current Controller Roles
+## Current Controller Roles
 
-## Raspberry Pi 4
-- main controller
-- teleop / UI / monitoring
-- operator console
-- serial link to Arduino
+### Raspberry Pi 4
+- Main high-level controller
+- Teleop / operator console
+- USB serial link to Arduino
+- Logging / monitoring / future autonomy logic
 
-## Arduino (current motor/sensor controller)
-- real-time motor control
-- ultrasonic sensor reading
-- IR edge sensor reading
-- safety layer enforcement
+### Arduino Mega 2560
+- Real-time motor control
+- Runtime safety enforcement
+- Ultrasonic sensing
+- IR edge sensing
+- Encoder pulse counting
+- Power / sensor telemetry expansion point
 
 ---
 
-# Current Live Hardware
+## Current Live Hardware
 
+### Core Control
 - Raspberry Pi 4
-- Arduino controller
-- Cytron motor driver
-- left DC motor
-- right DC motor
+- Arduino Mega 2560
+- USB serial link between Raspberry Pi and Arduino
+
+### Drive System
+- L298N motor driver
+- 4 TT DC motors
+  - left-side motor pair
+  - right-side motor pair
+- Differential drive layout
+
+### Safety / Sensing
 - HC-SR04 ultrasonic sensor
-- 4× downward IR edge sensors
-- power supply / battery
-- inline fuse (10A)
-- emergency stop switch
+- 4 downward-facing IR edge sensors
+- 2 groove coupler encoder sensors
+- INA219 current / voltage monitor
+- ACS712 current sensor modules
+- MPU6050 IMU
+
+### Power
+- Bench power supply (current development stage)
+- Inline fuse (10A)
+- Emergency stop switch
 
 ---
 
-# Naming Convention
+## Naming Convention
 
 Robot orientation is always defined **from the robot perspective facing forward**.
 
 | Name | Meaning |
-|-----|-----|
+|---|---|
 | FL | Front Left |
 | FR | Front Right |
 | RL | Rear Left |
 | RR | Rear Right |
 
-Motor naming:
-
-| Motor | Physical location |
-|-----|-----|
-| Left Motor | robot left side when facing forward |
-| Right Motor | robot right side when facing forward |
-
----
-
-# Arduino Pin Usage
-
-| Pin | Signal | Connected Device | Purpose | Status |
-|----|----|----|----|----|
-| D8 | TRIG | HC-SR04 | ultrasonic trigger | active |
-| D9 | ECHO | HC-SR04 | ultrasonic echo | active |
-| D10 | IR_FL | IR sensor | front-left edge detection | active |
-| D11 | IR_FR | IR sensor | front-right edge detection | active |
-| D12 | IR_RL | IR sensor | rear-left edge detection | active |
-| D13 | IR_RR | IR sensor | rear-right edge detection | active |
-
-Motor driver control pins are handled inside the motor controller code and should be verified against the Arduino motor controller sketch before documenting.
+### Motor Naming
+| Motor Group | Physical Location |
+|---|---|
+| Left Motor Group | left-side wheels when robot faces forward |
+| Right Motor Group | right-side wheels when robot faces forward |
 
 ---
 
-# Motor Driver Wiring (Cytron)
+## Current Confirmed Pin Map
 
-Cytron motor driver is used for differential drive control.
+### Motor Driver (L298N)
+| Arduino Pin | L298N Pin | Purpose | Status |
+|---|---|---|---|
+| D5 | ENA | left-side PWM enable | active |
+| D22 | IN1 | left-side direction input 1 | active |
+| D23 | IN2 | left-side direction input 2 | active |
+| D24 | IN3 | right-side direction input 1 | active |
+| D25 | IN4 | right-side direction input 2 | active |
+| D6 | ENB | right-side PWM enable | active |
 
-| Controller Pin | Driver Pin | Function | Notes |
-|----|----|----|----|
-| Arduino PWM pin | Cytron PWM | motor speed control | verify exact pin in motor_controller code |
-| Arduino digital pin | Cytron DIR | motor direction | verify exact pin in motor_controller code |
+### Ultrasonic Sensor (HC-SR04)
+| Arduino Pin | Sensor Pin | Purpose | Status |
+|---|---|---|---|
+| D30 | TRIG | ultrasonic trigger | active |
+| D31 | ECHO | ultrasonic echo | active |
 
-Motor outputs:
+### Edge Sensors
+| Arduino Pin | Sensor Position | Purpose | Status |
+|---|---|---|---|
+| D32 | FL | front-left edge detection | active |
+| D33 | FR | front-right edge detection | active |
+| D34 | RL | rear-left edge detection | active |
+| D35 | RR | rear-right edge detection | active |
 
-| Driver Output | Connected To |
-|----|----|
-| Motor A | Left motor |
-| Motor B | Right motor |
+### Encoders
+| Arduino Pin | Encoder | Purpose | Status |
+|---|---|---|---|
+| D2 | Left Encoder | left wheel pulse counting | bench validated |
+| D3 | Right Encoder | right wheel pulse counting | bench validated |
 
-If motors move in the wrong direction, polarity can be swapped at the motor terminals.
+### I2C Bus
+| Arduino Pin | Connected Device | Purpose | Status |
+|---|---|---|---|
+| D20 (SDA) | INA219, MPU6050 | I2C data | active / shared |
+| D21 (SCL) | INA219, MPU6050 | I2C clock | active / shared |
+
+### Analog Inputs
+| Arduino Pin | Device | Purpose | Status |
+|---|---|---|---|
+| A0 | ACS712 #1 | current sensing | baseline validated |
+| A1 | ACS712 #2 | current sensing | baseline validated |
 
 ---
 
-# Sensor Wiring
+## Motor Driver Wiring (L298N)
 
-## Ultrasonic (HC-SR04)
+### Control Side
+- D5 -> ENA
+- D22 -> IN1
+- D23 -> IN2
+- D24 -> IN3
+- D25 -> IN4
+- D6 -> ENB
 
-| Arduino Pin | Sensor Pin | Notes |
-|----|----|----|
-| D8 | TRIG | trigger signal |
-| D9 | ECHO | echo return |
+### Motor Outputs
+| L298N Output | Connected To |
+|---|---|
+| OUT1 / OUT2 | left motor group |
+| OUT3 / OUT4 | right motor group |
 
-Power:
+### Direction Note
+If commanded forward motion causes one side to rotate backward, swap that side's motor wires at the L298N output instead of changing project assumptions everywhere else.
 
+---
+
+## Sensor Wiring
+
+### 1) Ultrasonic Sensor (HC-SR04)
 | Sensor Pin | Connected To |
-|----|----|
+|---|---|
 | VCC | 5V |
 | GND | GND |
+| TRIG | D30 |
+| ECHO | D31 |
 
----
+### 2) IR Edge Sensors
+These sensors are mounted **facing downward** to detect floor edges / cliff conditions.
 
-## IR Edge Sensors
+| Sensor Position | Signal Pin | Power |
+|---|---|---|
+| FL | D32 | 5V / GND |
+| FR | D33 | 5V / GND |
+| RL | D34 | 5V / GND |
+| RR | D35 | 5V / GND |
 
-These sensors are mounted **facing downward** to detect floor edges / cliffs.
+### Observed Logic
+- `0` = floor present
+- `1` = edge / drop detected
 
-| Arduino Pin | Sensor | Position | Active State | Notes |
-|----|----|----|----|----|
-| D10 | IR sensor | Front Left | HIGH = edge | active |
-| D11 | IR sensor | Front Right | HIGH = edge | active |
-| D12 | IR sensor | Rear Left | HIGH = edge | active |
-| D13 | IR sensor | Rear Right | HIGH = edge | active |
+### 3) Encoder Sensors
+| Encoder | Signal Pin | Power |
+|---|---|---|
+| Left Encoder | D2 | 5V / GND |
+| Right Encoder | D3 | 5V / GND |
 
-Observed logic:
-# Hotel Robot Hardware Wiring Reference
+### Encoder Note
+Encoder wiring polarity must be checked carefully. Incorrect VCC/GND wiring can cause heating, unstable behavior, or board power issues.
 
-## Purpose
-This file tracks the current live wiring and signal mapping for the robot so future development does not rely only on code or memory.
-
----
-
-# Current Controller Roles
-
-## Raspberry Pi 4
-- main controller
-- teleop / UI / monitoring
-- operator console
-- serial link to Arduino
-
-## Arduino (current motor/sensor controller)
-- real-time motor control
-- ultrasonic sensor reading
-- IR edge sensor reading
-- safety layer enforcement
-
----
-
-# Current Live Hardware
-
-- Raspberry Pi 4
-- Arduino controller
-- Cytron motor driver
-- left DC motor
-- right DC motor
-- HC-SR04 ultrasonic sensor
-- 4× downward IR edge sensors
-- power supply / battery
-- inline fuse (10A)
-- emergency stop switch
-
----
-
-# Naming Convention
-
-Robot orientation is always defined **from the robot perspective facing forward**.
-
-| Name | Meaning |
-|-----|-----|
-| FL | Front Left |
-| FR | Front Right |
-| RL | Rear Left |
-| RR | Rear Right |
-
-Motor naming:
-
-| Motor | Physical location |
-|-----|-----|
-| Left Motor | robot left side when facing forward |
-| Right Motor | robot right side when facing forward |
-
----
-
-# Arduino Pin Usage
-
-| Pin | Signal | Connected Device | Purpose | Status |
-|----|----|----|----|----|
-| D8 | TRIG | HC-SR04 | ultrasonic trigger | active |
-| D9 | ECHO | HC-SR04 | ultrasonic echo | active |
-| D10 | IR_FL | IR sensor | front-left edge detection | active |
-| D11 | IR_FR | IR sensor | front-right edge detection | active |
-| D12 | IR_RL | IR sensor | rear-left edge detection | active |
-| D13 | IR_RR | IR sensor | rear-right edge detection | active |
-
-Motor driver control pins are handled inside the motor controller code and should be verified against the Arduino motor controller sketch before documenting.
-
----
-
-# Motor Driver Wiring (Cytron)
-
-Cytron motor driver is used for differential drive control.
-
-| Controller Pin | Driver Pin | Function | Notes |
-|----|----|----|----|
-| Arduino PWM pin | Cytron PWM | motor speed control | verify exact pin in motor_controller code |
-| Arduino digital pin | Cytron DIR | motor direction | verify exact pin in motor_controller code |
-
-Motor outputs:
-
-| Driver Output | Connected To |
-|----|----|
-| Motor A | Left motor |
-| Motor B | Right motor |
-
-If motors move in the wrong direction, polarity can be swapped at the motor terminals.
-
----
-
-# Sensor Wiring
-
-## Ultrasonic (HC-SR04)
-
-| Arduino Pin | Sensor Pin | Notes |
-|----|----|----|
-| D8 | TRIG | trigger signal |
-| D9 | ECHO | echo return |
-
-Power:
-
-| Sensor Pin | Connected To |
-|----|----|
+### 4) INA219
+#### Logic Side
+| INA219 Pin | Connected To |
+|---|---|
 | VCC | 5V |
 | GND | GND |
+| SDA | D20 |
+| SCL | D21 |
+
+#### High-Side Measurement Path
+Main supply positive is routed through INA219 before the motor driver input:
+
+`Bench PSU + -> INA219 VIN+ -> INA219 VIN- -> Emergency Stop -> L298N VS`
+
+or, if emergency stop is placed before INA219 in the final build, the measurement path must still remain fully in series with the motor supply positive line.
+
+### 5) ACS712
+| Module | Output Pin | Power |
+|---|---|---|
+| ACS712 #1 | A0 | 5V / GND |
+| ACS712 #2 | A1 | 5V / GND |
+
+### 6) MPU6050
+| MPU6050 Pin | Connected To |
+|---|---|
+| VCC | 5V |
+| GND | GND |
+| SDA | D20 |
+| SCL | D21 |
 
 ---
 
-## IR Edge Sensors
+## Raspberry Pi ↔ Arduino Communication
 
-These sensors are mounted **facing downward** to detect floor edges / cliffs.
-
-| Arduino Pin | Sensor | Position | Active State | Notes |
-|----|----|----|----|----|
-| D10 | IR sensor | Front Left | HIGH = edge | active |
-| D11 | IR sensor | Front Right | HIGH = edge | active |
-| D12 | IR sensor | Rear Left | HIGH = edge | active |
-| D13 | IR sensor | Rear Right | HIGH = edge | active |
-
-Observed logic:
-0 = floor detected
-1 = edge / drop detected
----
-
-# Raspberry Pi ↔ Arduino
-
-Communication uses USB serial.
+USB serial link is used between Raspberry Pi and Arduino.
 
 | From | To | Purpose | Notes |
-|----|----|----|----|
-| Raspberry Pi USB | Arduino USB | serial communication | `/dev/ttyACM0` |
+|---|---|---|---|
+| Raspberry Pi USB | Arduino USB | serial communication | usually `/dev/ttyACM0` |
 
-Serial communication is used for:
-- teleop commands
-- telemetry
-- safety faults
-- sensor data
+### Current Runtime Serial Contract
+Commands used by Raspberry Pi:
+- `VEL <left> <right>`
+- `STOP`
+- `RESET`
 
----
-
-# Power Wiring
-
-## Main Power Path
-
-Battery / SMPS
-↓
-Inline Fuse (10A)
-↓
-Emergency Stop Switch
-↓
-Motor Driver + Controllers
+Typical responses from Arduino:
+- `ACK ...`
+- `FAULT ...`
+- `TEL {...}`
 
 ---
 
-# Protection
+## Power Wiring Reference
 
+### Current Development Power Architecture
+- Arduino Mega powered by USB during development / testing
+- Bench power supply used for motor power path
+- All logic and motor systems must share a **common ground**
+
+### Main Power Path
+`Bench PSU + -> INA219 / emergency-stop path -> L298N VS`
+
+`Bench PSU - -> L298N GND -> Arduino GND (common reference)`
+
+### Protection
 | Component | Purpose |
-|----|----|
-| 10A inline fuse | protects against short circuit |
-| emergency stop switch | manual safety shutdown |
+|---|---|
+| 10A inline fuse | short-circuit protection |
+| emergency stop switch | manual power cut for motor drive path |
+
+### Critical Rule
+Do **not** use L298N 5V output to power the entire robot logic stack during development. Arduino logic power and motor power should remain intentionally controlled.
 
 ---
 
-# Installed But Not Yet Fully Used
+## Mounting Reference
 
-These components exist in the project but are not fully integrated yet.
+### Top Layer
+- Arduino Mega
+- L298N
+- power input
+- emergency stop
+- INA219
+- MPU6050
 
-- encoder sensors (wheel odometry)
-- Raspberry Pi camera module
-- limit switches (planned safety features)
+### Bottom Layer
+- 4 IR edge sensors facing floor
+- encoder sensors near wheel / coupler positions
+- breadboard for controlled signal / power distribution where needed
 
----
-
-# Free / Reserved Pins
-
-| Controller | Free Pins | Reserved Notes |
-|----|----|----|
-| Arduino | many remaining digital pins | future encoders / sensors |
-
-Exact availability should be confirmed before adding new hardware.
-
----
-
-# Critical Notes
-
-Edge sensor behavior:
-0 = floor present
-1 = edge detected
-
-Motor direction assumptions:
-- positive speed → forward motion
-- negative speed → reverse motion
-
-If robot moves opposite direction, swap motor polarity.
-
-Sensor limitations:
-- ultrasonic occasionally returns `NO ECHO`
-- IR sensors are sensitive to mounting height and surface reflectivity
+### Front
+- HC-SR04 mounted facing forward near the robot front centerline
 
 ---
 
-# Change Log
+## Current Validation Status
 
-**Day 9**
+### Confirmed Working
+- Raspberry Pi teleop control
+- L298N runtime control
+- HC-SR04 ultrasonic sensor
+- 4 IR edge sensors
+- INA219 measurement path
+- encoder basic bench response
+- ACS712 baseline output
+- Arduino runtime sketch with Pi serial control
+
+### Validated Individually / Pending Further Runtime Integration
+- MPU6050
+- full encoder telemetry integration into runtime console
+- ACS712 practical runtime use under load
+
+---
+
+## Firmware Reference
+
+### Active Runtime Sketch
+- `firmware/arduino/Runtime/hotel_robot_runtime_l298n/hotel_robot_runtime_l298n.ino`
+
+### Historical Archived Sketches
+- `firmware/arduino/Archive/...`
+
+### Test Sketches
+- `firmware/arduino/testing_program/...`
+
+---
+
+## Free / Reserved Pins
+
+| Area | Current Situation |
+|---|---|
+| Digital pins | several still available |
+| Analog pins | more available beyond A0 / A1 |
+| I2C bus | already shared by INA219 and MPU6050 |
+| Interrupt pins | D2 and D3 already assigned to encoders |
+
+Before adding new hardware, confirm pin use against the active runtime sketch instead of relying only on memory.
+
+---
+
+## Critical Notes
+
+### Edge Sensor Logic
+- `0 = floor present`
+- `1 = edge detected`
+
+### Direction Assumption
+- positive speed command -> forward motion
+- negative speed command -> reverse motion
+
+If motion is reversed physically, correct it at motor wiring or the runtime direction flags, not by silently changing multiple unrelated files.
+
+### Known Hardware Lessons
+- wrong encoder VCC/GND wiring can destabilize the system
+- INA219 readings become invalid if the measurement path is not truly in series
+- missing common ground between bench PSU and Arduino causes bad sensor / measurement behavior
+- breadboard wiring quality matters for shared sensor buses, especially I2C
+
+---
+
+## Change Log
+
+### Day 9
 - awareness layer added
-- ultrasonic sensing
-- IR edge sensors
-- telemetry system
+- ultrasonic sensing added
+- IR edge sensing added
+- telemetry system introduced
 
-**Day 10**
+### Day 10
 - safety layer added
 - motion blocking on edge detection
 - pivot safety improvements
+
+### Day 13
+- hardware baseline restored after project gap
+- migrated from Cytron reference wiring to L298N runtime wiring
+- revalidated ultrasonic, edge sensors, INA219, encoder bench response
+- restored Raspberry Pi teleop control
+- reorganized Arduino firmware into `Archive`, `Runtime`, and `testing_program`
